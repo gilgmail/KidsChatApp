@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent — KidsChatApp 開機自動啟動
+  安裝步驟：
+    1. 將此檔案複製到 ~/Library/LaunchAgents/
+       cp deploy/com.kidschat.server.plist ~/Library/LaunchAgents/
+    2. 編輯檔案，替換以下 PLACEHOLDER：
+       - YOUR_USERNAME     → 你的 macOS 帳號名稱（whoami）
+       - YOUR_GEMINI_KEY   → 你的 Gemini API Key
+    3. 載入並啟動：
+       launchctl load ~/Library/LaunchAgents/com.kidschat.server.plist
+    4. 查看狀態：
+       launchctl list | grep kidschat
+    5. 卸載（停止自動啟動）：
+       launchctl unload ~/Library/LaunchAgents/com.kidschat.server.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kidschat.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/KidsChatApp/venv/bin/python</string>
+        <string>/Users/YOUR_USERNAME/KidsChatApp/backend/main.py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GEMINI_API_KEY</key>
+        <string>YOUR_GEMINI_KEY</string>
+        <key>PORT</key>
+        <string>8000</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USERNAME/KidsChatApp/backend</string>
+
+    <!-- 開機自動啟動 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 崩潰後自動重啟 -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Log 輸出 -->
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/KidsChatApp/kidschat.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/KidsChatApp/kidschat_error.log</string>
+
+    <!-- 節流：崩潰後 10 秒才重啟，避免無限重啟耗電 -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

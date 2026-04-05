@@ -1,0 +1,43 @@
+# ────────────────────────────────────────────────────────────
+# KidsChatApp — systemd Unit File (for Raspberry Pi 5)
+# 手動安裝步驟（若不使用 pi5_setup.sh）：
+#
+#   1. 複製到 systemd 目錄：
+#      sudo cp deploy/kidschat.service /etc/systemd/system/
+#
+#   2. 建立環境變數檔（替換 API Key）：
+#      echo "GEMINI_API_KEY=AIzaSy..." | sudo tee /home/pi/KidsChatApp/.env
+#      sudo chmod 600 /home/pi/KidsChatApp/.env
+#
+#   3. 修改此檔案中的 User / WorkingDirectory / ExecStart 路徑
+#      以符合實際安裝位置
+#
+#   4. 啟用並啟動：
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable kidschat
+#      sudo systemctl start kidschat
+#
+#   5. 查看狀態 / log：
+#      systemctl status kidschat
+#      journalctl -u kidschat -f
+# ────────────────────────────────────────────────────────────
+
+[Unit]
+Description=KidsChatApp — 幼兒 AI 對話後端 (Gemini)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/KidsChatApp/backend
+EnvironmentFile=/home/pi/KidsChatApp/.env
+ExecStart=/home/pi/KidsChatApp/venv/bin/python main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kidschat
+
+[Install]
+WantedBy=multi-user.target
