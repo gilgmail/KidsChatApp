@@ -21,8 +21,16 @@ struct ContentView: View {
             // AI 回覆
             Group {
                 if voiceManager.isLoading {
-                    ProgressView()
-                        .scaleEffect(1.5)
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        if !voiceManager.recognizedText.isEmpty {
+                            Text("「\(voiceManager.recognizedText)」")
+                                .font(.callout)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
                 } else {
                     Text(voiceManager.aiReply.isEmpty ? "準備好了，按住按鈕開始說話！" : voiceManager.aiReply)
                         .font(.title2)
@@ -32,11 +40,18 @@ struct ContentView: View {
             }
             .frame(minHeight: 120)
 
-            // 辨識中文字（即時顯示）
-            Text(voiceManager.recognizedText)
-                .foregroundColor(.secondary)
-                .font(.callout)
-                .padding(.horizontal)
+            // 錄音中：即時顯示辨識文字
+            if voiceManager.isRecording {
+                Text(voiceManager.recognizedText.isEmpty ? "正在聆聽..." : voiceManager.recognizedText)
+                    .foregroundColor(.red)
+                    .font(.callout)
+                    .padding(.horizontal)
+            } else {
+                Text(voiceManager.recognizedText)
+                    .foregroundColor(.secondary)
+                    .font(.callout)
+                    .padding(.horizontal)
+            }
 
             Spacer()
 

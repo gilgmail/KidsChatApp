@@ -10,3 +10,5 @@ logs/
 summaries/
 .pytest_cache/
 ios/KidsChatApp.xcodeproj/xcuserdata/
+
+ios/KidsChatApp.xcodeproj/project.xcworkspace/xcuserdata/

@@ -8,17 +8,16 @@ class VoiceManager: ObservableObject {
     @Published var aiReply = ""
     @Published var isLoading = false
 
-    // 支援中英混講：zh-TW 辨識器可處理中文為主夾雜英文的場景
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-TW"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
-    private let synthesizer = AVSpeechSynthesizer()
+    private var audioPlayer: AVAudioPlayer?
+    private let synthesizer = AVSpeechSynthesizer()  // 必須是 stored property，否則會提早釋放
 
-    // Pi5 後端位址，與 .env PORT=8706 一致
     private let apiURL = URL(string: "http://10.1.1.85:8706/talk")!
 
-    // MARK: — 權限申請（App 啟動時呼叫一次）
+    // MARK: — 權限申請
 
     func requestPermissions() {
         SFSpeechRecognizer.requestAuthorization { _ in }
@@ -55,7 +54,6 @@ class VoiceManager: ObservableObject {
 
         audioEngine.prepare()
         try? audioEngine.start()
-
         DispatchQueue.main.async { self.isRecording = true }
     }
 
@@ -80,51 +78,79 @@ class VoiceManager: ObservableObject {
         await callAPI(text: recognizedText, profileId: profileId)
     }
 
-    // MARK: — API 呼叫
+    // MARK: — API 呼叫（文字 + 音訊一次取回）
 
     private func callAPI(text: String, profileId: String) async {
         var request = URLRequest(url: apiURL)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
+        request.timeoutInterval = 30  // TTS 需要更長時間
 
         let body: [String: String] = ["profile_id": profileId, "message": text]
         request.httpBody = try? JSONEncoder().encode(body)
 
         do {
             let (data, _) = try await URLSession.shared.data(for: request)
-            if let response = try? JSONDecoder().decode([String: String].self, from: data),
-               let reply = response["reply"] {
+
+            struct TalkResponse: Decodable {
+                let reply: String
+                let audio_b64: String?
+            }
+
+            guard let response = try? JSONDecoder().decode(TalkResponse.self, from: data) else {
+                // 解析失敗時顯示原始錯誤（例如 429 quota 訊息）
+                let raw = String(data: data, encoding: .utf8) ?? "未知錯誤"
                 DispatchQueue.main.async {
-                    self.aiReply = reply
+                    self.aiReply = raw.contains("429") ? "API 用量已滿，請稍後再試" :
+                                   raw.contains("detail") ? "伺服器錯誤，請稍後再試" : "回應格式錯誤"
                     self.isLoading = false
-                    self.speak(text: reply, profileId: profileId)
+                }
+                return
+            }
+
+            DispatchQueue.main.async { self.aiReply = response.reply }
+
+            // 優先播放 Gemini 語音，fallback 到系統 TTS
+            if let audioB64 = response.audio_b64,
+               let audioData = Data(base64Encoded: audioB64) {
+                playAudio(data: audioData)
+            } else {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.fallbackSpeak(text: response.reply, profileId: profileId)
                 }
             }
+
         } catch {
             DispatchQueue.main.async {
-                self.aiReply = "連線失敗，請確認 Pi5 是否開機 🤖"
+                self.aiReply = "連線失敗，請確認 Pi5 是否開機"
                 self.isLoading = false
             }
         }
     }
 
-    // MARK: — 本機 TTS 播放
+    // MARK: — 播放 WAV 音訊
 
-    private func speak(text: String, profileId: String) {
-        // 切換到播放模式
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
-
-        let utterance = AVSpeechUtterance(string: text)
-        if profileId == "kid" {
-            utterance.voice = AVSpeechSynthesisVoice(language: "zh-TW")
-            utterance.rate = 0.45  // 慢速，適合幼兒
-        } else {
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-            utterance.rate = 0.50
+    private func playAudio(data: Data) {
+        DispatchQueue.main.async {
+            self.isLoading = false
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                try AVAudioSession.sharedInstance().setActive(true)
+                self.audioPlayer = try AVAudioPlayer(data: data)
+                self.audioPlayer?.play()
+            } catch {
+                // 若播放失敗靜默降級
+            }
         }
+    }
 
+    // MARK: — 備用系統 TTS
+
+    private func fallbackSpeak(text: String, profileId: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: profileId == "kid" ? "zh-TW" : "en-US")
+        utterance.rate = 0.45
         synthesizer.speak(utterance)
     }
 }
