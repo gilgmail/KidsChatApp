@@ -26,7 +26,7 @@ class AppConfig:
         default_factory=lambda: os.environ.get("GEMINI_API_KEY", "")
     )
     model_name: str = field(
-        default_factory=lambda: os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        default_factory=lambda: os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
     )
 
     # ── Server ──────────────────────────────────

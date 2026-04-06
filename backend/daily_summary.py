@@ -22,8 +22,9 @@ import google.generativeai as genai
 
 # ── 路徑設定 ─────────────────────────────────────────────────
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR      = os.path.join(SCRIPT_DIR, "logs")
-SUMMARY_DIR  = os.path.join(SCRIPT_DIR, "summaries")
+PROJECT_DIR  = os.path.dirname(SCRIPT_DIR)
+LOG_DIR      = os.path.join(PROJECT_DIR, "logs")
+SUMMARY_DIR  = os.path.join(PROJECT_DIR, "summaries")
 os.makedirs(SUMMARY_DIR, exist_ok=True)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")

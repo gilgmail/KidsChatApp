@@ -6,3 +6,7 @@ __pycache__/
 kidschat.pid
 kidschat.log
 .DS_Store
+logs/
+summaries/
+.pytest_cache/
+ios/KidsChatApp.xcodeproj/xcuserdata/

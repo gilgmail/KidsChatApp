@@ -1,0 +1,38 @@
+name: KidsChatApp
+options:
+  bundleIdPrefix: com.gilko
+  deploymentTarget:
+    iOS: "16.0"
+  defaultConfig: Debug
+
+targets:
+  KidsChatApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleName: KidsChatApp
+        CFBundleDisplayName: Sparky
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSMicrophoneUsageDescription: "需要麥克風與 Sparky 說話"
+        NSSpeechRecognitionUsageDescription: "需要語音辨識來理解你說的話"
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        PRODUCT_BUNDLE_IDENTIFIER: com.gilko.kidschatapp
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    scheme:
+      testTargets: []
