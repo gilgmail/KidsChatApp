@@ -26,6 +26,7 @@ SILENCE_SEC      = 0.6
 MAX_SEC          = 12
 IDLE_TIMEOUT_SEC = int(os.environ.get("VOICE_IDLE_TIMEOUT", "600"))
 VOICE_MODE       = os.environ.get("VOICE_MODE", "chat")
+LOG_DIR          = os.path.expanduser("~/hermes-workspace/logs")
 
 YTDLP = shutil.which("yt-dlp") or os.path.expanduser("~/.local/bin/yt-dlp")
 
@@ -84,6 +85,20 @@ LIVE_CONFIG = gtypes.LiveConnectConfig(
 )
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
+
+
+# ── 對話 log ─────────────────────────────────────────────────────────────────
+
+def append_log(speaker: str, text: str):
+    if not text.strip():
+        return
+    os.makedirs(LOG_DIR, exist_ok=True)
+    today = time.strftime("%Y-%m-%d")
+    path  = os.path.join(LOG_DIR, f"{today}.md")
+    ts    = time.strftime("%H:%M")
+    line  = f"## {ts}\n**{speaker}**: {text.strip()}\n\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(line)
 
 
 # ── 藍牙檢查 ──────────────────────────────────────────────────────────────────
@@ -147,15 +162,20 @@ def get_whisper():
         _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
     return _whisper_model
 
+def preload_whisper():
+    """啟動時預載，避免第一次說話卡 10-30 秒"""
+    m = get_whisper()
+    list(m.transcribe(np.zeros(16000, dtype=np.float32), language="zh", beam_size=1)[0])
+
 
 def kids_stt(audio: np.ndarray) -> str:
-    """快速 STT，用於偵測關鍵字（限前 6 秒避免卡住）"""
+    """快速 STT，用於偵測關鍵字（限前 3 秒）"""
     try:
-        short = audio[:SAMPLE_RATE * 6].astype(np.float32)
+        short = audio[:SAMPLE_RATE * 3].astype(np.float32)
         # 音量放大 4 倍，補償藍牙麥克風偏小
         short = np.clip(short * 4.0, -1.0, 1.0)
         segs, _ = get_whisper().transcribe(
-            short, language="zh", beam_size=3, vad_filter=False,
+            short, language="zh", beam_size=1, vad_filter=False,
             condition_on_previous_text=False,
             initial_prompt="小孩說：唱歌、小星星、掰掰、跳舞、拜拜。"
         )
@@ -185,6 +205,7 @@ def detect_goodbye(text: str) -> bool:
 
 async def play_youtube_song(query: str):
     """用 yt-dlp 從 Bilibili 搜尋並播放，最多播 90 秒"""
+    loop = asyncio.get_event_loop()
     print(f"\n🎵 搜尋：{query}", flush=True)
     tmp = f"/tmp/kids_song_{int(time.time())}.mp3"
     try:
@@ -209,20 +230,23 @@ async def play_youtube_song(query: str):
             return
 
         print(f"\n▶ 播放中（最多 90 秒）", flush=True)
-        ff = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-i", tmp, "-f", "s16le", "-ar", "24000", "-ac", "1", "-",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        ap = await asyncio.create_subprocess_exec(
-            "aplay", "-q", "-D", "pulse", "-f", "S16_LE", "-r", "24000", "-c", "1",
-            stdin=ff.stdout,
-        )
-        try:
-            await asyncio.wait_for(ap.wait(), timeout=90)
-        except asyncio.TimeoutError:
-            ap.kill()
-        ff.kill()
+
+        def _play_blocking():
+            ff = subprocess.Popen(
+                ["ffmpeg", "-i", tmp, "-f", "s16le", "-ar", "24000", "-ac", "1", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            ap = subprocess.Popen(
+                ["aplay", "-q", "-D", "pulse", "-f", "S16_LE", "-r", "24000", "-c", "1"],
+                stdin=ff.stdout, stderr=subprocess.DEVNULL,
+            )
+            try:
+                ap.wait(timeout=90)
+            except subprocess.TimeoutExpired:
+                ap.kill()
+            ff.kill()
+
+        await loop.run_in_executor(None, _play_blocking)
         print("\n[播放結束]", flush=True)
     finally:
         if os.path.exists(tmp):
@@ -292,6 +316,11 @@ async def main():
     print(f"持久 session + 對話記憶 | 閒置 {IDLE_TIMEOUT_SEC//60} 分鐘自動關閉")
     print("-" * 45)
 
+    if VOICE_MODE == "kids":
+        print("載入 Whisper...", end=" ", flush=True)
+        await loop.run_in_executor(None, preload_whisper)
+        print("完成", flush=True)
+
     while True:
         try:
             async with client.aio.live.connect(
@@ -315,15 +344,19 @@ async def main():
 
                     last_active = time.time()
 
-                    # kids 模式：偵測唱歌 / 掰掰
                     if VOICE_MODE == "kids":
-                        # 能量太低表示沒有真實語音，跳過 Whisper 避免幻覺
-                        rms = float(np.sqrt(np.mean(audio ** 2)))
-                        if rms < 0.004:
-                            await one_turn(session, audio)
-                            continue
-                        text = await loop.run_in_executor(None, kids_stt, audio)
+                        # Whisper 與 Gemini 並行：先送給 Gemini，Whisper 同時跑
+                        stt_future = loop.run_in_executor(None, kids_stt, audio)
+                        await one_turn(session, audio)
+
+                        # Gemini 說完後，取 Whisper 結果（最多再等 3s）
+                        try:
+                            text = await asyncio.wait_for(stt_future, timeout=3.0)
+                        except Exception:
+                            text = ""
                         print(f"\n[識別：{text}]", flush=True)
+                        if text:
+                            append_log("女兒", text)
 
                         if detect_goodbye(text):
                             print("\n[掰掰，自動關閉]", flush=True)
@@ -332,9 +365,8 @@ async def main():
                         song_query = detect_song(text)
                         if song_query:
                             await play_youtube_song(song_query)
-                            continue  # 跳過 Gemini，直接回到錄音
-
-                    await one_turn(session, audio)
+                    else:
+                        await one_turn(session, audio)
 
         except KeyboardInterrupt:
             print("\n再見！")
