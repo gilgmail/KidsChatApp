@@ -152,14 +152,18 @@ def kids_stt(audio: np.ndarray) -> str:
     """快速 STT，用於偵測關鍵字（限前 6 秒避免卡住）"""
     try:
         short = audio[:SAMPLE_RATE * 6].astype(np.float32)
-        # 音量放大 3 倍，補償藍牙麥克風偏小
-        short = np.clip(short * 3.0, -1.0, 1.0)
+        # 音量放大 4 倍，補償藍牙麥克風偏小
+        short = np.clip(short * 4.0, -1.0, 1.0)
         segs, _ = get_whisper().transcribe(
-            short, beam_size=1, vad_filter=False,
-            condition_on_previous_text=False
+            short, language="zh", beam_size=3, vad_filter=False,
+            condition_on_previous_text=False,
+            initial_prompt="小孩說：唱歌、小星星、掰掰、跳舞、拜拜。"
         )
-        return "".join(s.text for s in segs).strip().lower()
-    except Exception:
+        result = "".join(s.text for s in segs).strip().lower()
+        print(f"\n[Whisper raw: '{result}']", flush=True)
+        return result
+    except Exception as e:
+        print(f"\n[Whisper error: {e}]", flush=True)
         return ""
 
 
@@ -186,12 +190,15 @@ async def play_youtube_song(query: str):
     try:
         dl = await asyncio.create_subprocess_exec(
             YTDLP, "-x", "--audio-format", "mp3",
+            "--retries", "3",
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "--add-header", "Referer:https://www.bilibili.com/",
             "-o", tmp, f"bilisearch1:{query}",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         try:
-            await asyncio.wait_for(dl.wait(), timeout=60)
+            await asyncio.wait_for(dl.wait(), timeout=120)
         except asyncio.TimeoutError:
             dl.kill()
             print("\n[歌曲下載逾時]", flush=True)
@@ -208,7 +215,7 @@ async def play_youtube_song(query: str):
             stderr=asyncio.subprocess.DEVNULL,
         )
         ap = await asyncio.create_subprocess_exec(
-            "aplay", "-q", "-f", "S16_LE", "-r", "24000", "-c", "1",
+            "aplay", "-q", "-D", "pulse", "-f", "S16_LE", "-r", "24000", "-c", "1",
             stdin=ff.stdout,
         )
         try:
@@ -250,7 +257,7 @@ async def one_turn(session, audio: np.ndarray):
             if audio_data:
                 if proc is None:
                     proc = subprocess.Popen(
-                        ["aplay", "-q", "-f", "S16_LE", "-r", "24000", "-c", "1"],
+                        ["aplay", "-q", "-D", "pulse", "-f", "S16_LE", "-r", "24000", "-c", "1"],
                         stdin=subprocess.PIPE,
                     )
                 if first:
@@ -310,6 +317,11 @@ async def main():
 
                     # kids 模式：偵測唱歌 / 掰掰
                     if VOICE_MODE == "kids":
+                        # 能量太低表示沒有真實語音，跳過 Whisper 避免幻覺
+                        rms = float(np.sqrt(np.mean(audio ** 2)))
+                        if rms < 0.004:
+                            await one_turn(session, audio)
+                            continue
                         text = await loop.run_in_executor(None, kids_stt, audio)
                         print(f"\n[識別：{text}]", flush=True)
 
