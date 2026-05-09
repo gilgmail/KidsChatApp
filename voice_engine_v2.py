@@ -19,8 +19,8 @@ from google.genai import types as gtypes
 
 GOOGLE_API_KEY   = os.environ["GOOGLE_API_KEY"]
 SAMPLE_RATE      = 16000
-SILENCE_THRESH   = 0.015
-SILENCE_SEC      = 0.6
+SILENCE_THRESH   = 0.010
+SILENCE_SEC      = 1.2
 MAX_SEC          = 12
 IDLE_TIMEOUT_SEC = int(os.environ.get("VOICE_IDLE_TIMEOUT", "600"))
 VOICE_MODE       = os.environ.get("VOICE_MODE", "chat")
