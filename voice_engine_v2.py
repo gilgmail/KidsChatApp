@@ -40,7 +40,7 @@ SONG_MAP = {
     "愛你":    "我愛你 兒歌",
 }
 
-GOODBYE_WORDS = {"掰掰", "拜拜", "bye", "再見", "掰"}
+GOODBYE_WORDS = {"掰掰", "拜拜", "bye", "再見", "掰", "byebye", "bye bye", "goodbye"}
 
 SYSTEMS = {
     "chat": (
@@ -152,11 +152,13 @@ def kids_stt(audio: np.ndarray) -> str:
     """快速 STT，用於偵測關鍵字（限前 6 秒避免卡住）"""
     try:
         short = audio[:SAMPLE_RATE * 6].astype(np.float32)
+        # 音量放大 3 倍，補償藍牙麥克風偏小
+        short = np.clip(short * 3.0, -1.0, 1.0)
         segs, _ = get_whisper().transcribe(
-            short, language="zh", beam_size=1, vad_filter=True,
+            short, beam_size=1, vad_filter=False,
             condition_on_previous_text=False
         )
-        return "".join(s.text for s in segs).strip()
+        return "".join(s.text for s in segs).strip().lower()
     except Exception:
         return ""
 
@@ -178,11 +180,10 @@ def detect_goodbye(text: str) -> bool:
 # ── YouTube 播歌 ──────────────────────────────────────────────────────────────
 
 async def play_youtube_song(query: str):
-    """用 yt-dlp 搜尋並串流播放，最多播 90 秒"""
+    """用 yt-dlp 從 Bilibili 搜尋並播放，最多播 90 秒"""
     print(f"\n🎵 搜尋：{query}", flush=True)
     tmp = f"/tmp/kids_song_{int(time.time())}.mp3"
     try:
-        # 下載
         dl = await asyncio.create_subprocess_exec(
             YTDLP, "-x", "--audio-format", "mp3",
             "-o", tmp, f"bilisearch1:{query}",
@@ -190,7 +191,7 @@ async def play_youtube_song(query: str):
             stderr=asyncio.subprocess.DEVNULL,
         )
         try:
-            await asyncio.wait_for(dl.wait(), timeout=30)
+            await asyncio.wait_for(dl.wait(), timeout=60)
         except asyncio.TimeoutError:
             dl.kill()
             print("\n[歌曲下載逾時]", flush=True)
@@ -201,7 +202,6 @@ async def play_youtube_song(query: str):
             return
 
         print(f"\n▶ 播放中（最多 90 秒）", flush=True)
-        # ffmpeg 轉 pcm → aplay 播放
         ff = await asyncio.create_subprocess_exec(
             "ffmpeg", "-i", tmp, "-f", "s16le", "-ar", "24000", "-ac", "1", "-",
             stdout=asyncio.subprocess.PIPE,
