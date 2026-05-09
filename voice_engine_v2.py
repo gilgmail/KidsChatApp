@@ -4,6 +4,7 @@ Voice Engine v2 — Gemini Live 持久 session + 對話記憶
   + 藍牙檢查（無藍牙則拒絕啟動）
   + 藍牙斷線自動關閉
   + 閒置 10 分鐘自動關閉（可調 IDLE_TIMEOUT_SEC）
+  + 多模式：VOICE_MODE=chat|kids|english
 """
 import asyncio
 import os
@@ -22,11 +23,33 @@ SILENCE_THRESH   = 0.015
 SILENCE_SEC      = 0.6
 MAX_SEC          = 12
 IDLE_TIMEOUT_SEC = int(os.environ.get("VOICE_IDLE_TIMEOUT", "600"))  # 預設 10 分鐘
+VOICE_MODE       = os.environ.get("VOICE_MODE", "chat")
 
-SYSTEM = (
-    "你是繁體中文語音助理。必須用自然流暢的繁體中文口語回答。"
-    "不使用任何書面格式或符號。說話像真人一樣。"
-)
+SYSTEMS = {
+    "chat": (
+        "你是繁體中文語音助理。必須用自然流暢的繁體中文口語回答。"
+        "不使用任何書面格式或符號。說話像真人一樣。"
+    ),
+    "kids": (
+        "你在和一個2歲9個月大的女孩說話。"
+        "請用最簡單的繁體中文，每次只說一兩句短話。"
+        "語氣要溫柔、有趣、像在玩遊戲一樣。"
+        "多用疊字和擬聲詞（例如：小狗狗、喵喵叫）。"
+        "如果小朋友說得不清楚，溫柔重複一遍幫她確認。"
+        "話題：動物、顏色、食物、家人、簡單故事。"
+    ),
+    "english": (
+        "You are a friendly English conversation coach. "
+        "Speak only in English. Keep sentences natural and clear. "
+        "If the user mispronounces a word, gently repeat it correctly in your response "
+        "without making them feel embarrassed (e.g. 'Yes, that's a BEACH — great!'). "
+        "Encourage every attempt. If the user speaks Chinese, kindly ask them to try in English. "
+        "Keep responses short and conversational."
+    ),
+}
+
+SYSTEM = SYSTEMS.get(VOICE_MODE, SYSTEMS["chat"])
+MODE_NAMES = {"chat": "純聊天", "kids": "兒童對話（2y9m）", "english": "英文練習"}
 
 LIVE_CONFIG = gtypes.LiveConnectConfig(
     response_modalities=["AUDIO"],
@@ -154,8 +177,9 @@ async def one_turn(session, audio: np.ndarray):
 
 async def main():
     loop = asyncio.get_event_loop()
-    print("語音助理 v2 已啟動（Ctrl+C 離開）")
-    print(f"模式：持久 session + 對話記憶 | 閒置 {IDLE_TIMEOUT_SEC//60} 分鐘自動關閉")
+    mode_label = MODE_NAMES.get(VOICE_MODE, VOICE_MODE)
+    print(f"語音助理 v2 已啟動（Ctrl+C 離開）  模式：{mode_label}")
+    print(f"持久 session + 對話記憶 | 閒置 {IDLE_TIMEOUT_SEC//60} 分鐘自動關閉")
     print("-" * 45)
 
     while True:
