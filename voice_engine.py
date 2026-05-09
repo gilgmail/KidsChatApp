@@ -15,7 +15,7 @@ from faster_whisper import WhisperModel
 from google import genai
 from google.genai import types as gtypes
 
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "AIzaSyDweqkUmPyNzmUPTN9Y8mE2Su7lD8uD8VY")
+GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
 SAMPLE_RATE    = 16000
 SILENCE_THRESH = 0.015
 SILENCE_SEC    = 0.5
