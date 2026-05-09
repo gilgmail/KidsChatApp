@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 Voice Engine v2 — Gemini Live 持久 session + 對話記憶
-每輪錄音 + activity_start/end，穩定可靠
+  + 藍牙檢查（無藍牙則拒絕啟動）
+  + 藍牙斷線自動關閉
+  + 閒置 10 分鐘自動關閉（可調 IDLE_TIMEOUT_SEC）
 """
 import asyncio
 import os
 import subprocess
+import sys
 import time
 
 import numpy as np
@@ -13,11 +16,12 @@ import sounddevice as sd
 from google import genai
 from google.genai import types as gtypes
 
-GOOGLE_API_KEY = os.environ["GOOGLE_API_KEY"]
-SAMPLE_RATE    = 16000
-SILENCE_THRESH = 0.015
-SILENCE_SEC    = 0.6
-MAX_SEC        = 12
+GOOGLE_API_KEY   = os.environ["GOOGLE_API_KEY"]
+SAMPLE_RATE      = 16000
+SILENCE_THRESH   = 0.015
+SILENCE_SEC      = 0.6
+MAX_SEC          = 12
+IDLE_TIMEOUT_SEC = int(os.environ.get("VOICE_IDLE_TIMEOUT", "600"))  # 預設 10 分鐘
 
 SYSTEM = (
     "你是繁體中文語音助理。必須用自然流暢的繁體中文口語回答。"
@@ -39,6 +43,29 @@ LIVE_CONFIG = gtypes.LiveConnectConfig(
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
+
+# ── 藍牙檢查 ──────────────────────────────────────────────────────────────────
+
+def bluetooth_connected() -> bool:
+    """檢查是否有藍牙音訊裝置（sink）已連線"""
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "sinks", "short"], text=True, stderr=subprocess.DEVNULL
+        )
+        return "bluez" in out.lower()
+    except Exception:
+        return False
+
+
+def require_bluetooth():
+    """啟動時檢查藍牙，未連線則印出錯誤並退出"""
+    if not bluetooth_connected():
+        print("❌ 未偵測到藍牙音訊裝置，請先連接藍牙耳機或音箱後再啟動。", flush=True)
+        sys.exit(1)
+    print("✓ 藍牙裝置已連線", flush=True)
+
+
+# ── 錄音 ──────────────────────────────────────────────────────────────────────
 
 def record_until_silence() -> np.ndarray:
     frames: list[np.ndarray] = []
@@ -69,9 +96,11 @@ def record_until_silence() -> np.ndarray:
     return np.concatenate(frames).flatten() if frames else np.zeros(SAMPLE_RATE)
 
 
+# ── 一輪對話 ──────────────────────────────────────────────────────────────────
+
 async def one_turn(session, audio: np.ndarray):
-    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
-    t0  = time.time()
+    pcm  = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+    t0   = time.time()
     proc = None
 
     try:
@@ -121,10 +150,12 @@ async def one_turn(session, audio: np.ndarray):
             proc.wait()
 
 
+# ── 主迴圈 ────────────────────────────────────────────────────────────────────
+
 async def main():
     loop = asyncio.get_event_loop()
     print("語音助理 v2 已啟動（Ctrl+C 離開）")
-    print("模式：持久 session + 對話記憶")
+    print(f"模式：持久 session + 對話記憶 | 閒置 {IDLE_TIMEOUT_SEC//60} 分鐘自動關閉")
     print("-" * 45)
 
     while True:
@@ -133,10 +164,24 @@ async def main():
                 model="gemini-3.1-flash-live-preview", config=LIVE_CONFIG
             ) as session:
                 print("Gemini 連線成功")
+                last_active = time.time()
+
                 while True:
+                    # 閒置逾時檢查
+                    if time.time() - last_active > IDLE_TIMEOUT_SEC:
+                        print(f"\n[閒置超過 {IDLE_TIMEOUT_SEC//60} 分鐘，自動關閉]", flush=True)
+                        return
+
+                    # 藍牙斷線檢查（每輪）
+                    if not bluetooth_connected():
+                        print("\n[藍牙斷線，自動關閉]", flush=True)
+                        return
+
                     audio = await loop.run_in_executor(None, record_until_silence)
                     if len(audio) < SAMPLE_RATE * 0.3:
                         continue
+
+                    last_active = time.time()
                     await one_turn(session, audio)
 
         except KeyboardInterrupt:
@@ -148,4 +193,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    require_bluetooth()
     asyncio.run(main())
