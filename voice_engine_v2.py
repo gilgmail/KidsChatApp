@@ -185,7 +185,7 @@ async def play_youtube_song(query: str):
         # 下載
         dl = await asyncio.create_subprocess_exec(
             YTDLP, "-x", "--audio-format", "mp3",
-            "-o", tmp, f"ytsearch1:{query}",
+            "-o", tmp, f"bilisearch1:{query}",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
