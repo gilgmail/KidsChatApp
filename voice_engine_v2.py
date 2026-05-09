@@ -5,9 +5,11 @@ Voice Engine v2 — Gemini Live 持久 session + 對話記憶
   + 藍牙斷線自動關閉
   + 閒置 10 分鐘自動關閉（可調 IDLE_TIMEOUT_SEC）
   + 多模式：VOICE_MODE=chat|kids|english
+  + kids 模式：說「唱歌」播 YouTube、說「掰掰」自動關閉
 """
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -22,8 +24,23 @@ SAMPLE_RATE      = 16000
 SILENCE_THRESH   = 0.015
 SILENCE_SEC      = 0.6
 MAX_SEC          = 12
-IDLE_TIMEOUT_SEC = int(os.environ.get("VOICE_IDLE_TIMEOUT", "600"))  # 預設 10 分鐘
+IDLE_TIMEOUT_SEC = int(os.environ.get("VOICE_IDLE_TIMEOUT", "600"))
 VOICE_MODE       = os.environ.get("VOICE_MODE", "chat")
+
+YTDLP = shutil.which("yt-dlp") or os.path.expanduser("~/.local/bin/yt-dlp")
+
+# 兒歌關鍵字 → YouTube 搜尋詞
+SONG_MAP = {
+    "小星星":   "小星星 兒歌",
+    "生日快樂": "生日快樂歌",
+    "兩隻老虎": "兩隻老虎 兒歌",
+    "火車快飛": "火車快飛 兒歌",
+    "蝴蝶":    "蝴蝶 兒歌",
+    "拔蘿蔔":  "拔蘿蔔 兒歌",
+    "愛你":    "我愛你 兒歌",
+}
+
+GOODBYE_WORDS = {"掰掰", "拜拜", "bye", "再見", "掰"}
 
 SYSTEMS = {
     "chat": (
@@ -35,10 +52,10 @@ SYSTEMS = {
         "規則：每次只說一兩句，不要長篇大論。"
         "優先回應她說的話和需求，不要自己主導話題。"
         "她問問題就簡單回答。她想玩就陪她玩。"
-        "她要唱歌就唱（兒歌：小星星、生日快樂、兩隻老虎、火車快飛等）。"
         "她說跳舞就一起喊節奏或唱跳舞的歌。"
         "用最簡單的詞，多用疊字和擬聲詞。語氣溫柔活潑。"
         "不要主動出題考她，不要說教，不要問太多問題。"
+        "如果她說唱歌，回答「好，幫你找！」就好，不要自己唱。"
     ),
     "english": (
         "You are a friendly English conversation coach. "
@@ -72,7 +89,6 @@ client = genai.Client(api_key=GOOGLE_API_KEY)
 # ── 藍牙檢查 ──────────────────────────────────────────────────────────────────
 
 def bluetooth_connected() -> bool:
-    """檢查是否有藍牙音訊裝置（sink）已連線"""
     try:
         out = subprocess.check_output(
             ["pactl", "list", "sinks", "short"], text=True, stderr=subprocess.DEVNULL
@@ -83,7 +99,6 @@ def bluetooth_connected() -> bool:
 
 
 def require_bluetooth():
-    """啟動時檢查藍牙，未連線則印出錯誤並退出"""
     if not bluetooth_connected():
         print("❌ 未偵測到藍牙音訊裝置，請先連接藍牙耳機或音箱後再啟動。", flush=True)
         sys.exit(1)
@@ -119,6 +134,92 @@ def record_until_silence() -> np.ndarray:
                 break
 
     return np.concatenate(frames).flatten() if frames else np.zeros(SAMPLE_RATE)
+
+
+# ── kids 模式：STT + 意圖偵測 ─────────────────────────────────────────────────
+
+_whisper_model = None
+
+def get_whisper():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+def kids_stt(audio: np.ndarray) -> str:
+    """快速 STT，用於偵測關鍵字（限前 6 秒避免卡住）"""
+    try:
+        short = audio[:SAMPLE_RATE * 6].astype(np.float32)
+        segs, _ = get_whisper().transcribe(
+            short, language="zh", beam_size=1, vad_filter=True,
+            condition_on_previous_text=False
+        )
+        return "".join(s.text for s in segs).strip()
+    except Exception:
+        return ""
+
+
+def detect_song(text: str) -> str | None:
+    """回傳 YouTube 搜尋詞，找不到歌名則用通用兒歌搜尋"""
+    if "唱" not in text and "歌" not in text:
+        return None
+    for keyword, query in SONG_MAP.items():
+        if keyword in text:
+            return query
+    return "好聽兒歌 台灣"
+
+
+def detect_goodbye(text: str) -> bool:
+    return any(w in text for w in GOODBYE_WORDS)
+
+
+# ── YouTube 播歌 ──────────────────────────────────────────────────────────────
+
+async def play_youtube_song(query: str):
+    """用 yt-dlp 搜尋並串流播放，最多播 90 秒"""
+    print(f"\n🎵 搜尋：{query}", flush=True)
+    tmp = f"/tmp/kids_song_{int(time.time())}.mp3"
+    try:
+        # 下載
+        dl = await asyncio.create_subprocess_exec(
+            YTDLP, "-x", "--audio-format", "mp3",
+            "-o", tmp, f"ytsearch1:{query}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(dl.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            dl.kill()
+            print("\n[歌曲下載逾時]", flush=True)
+            return
+
+        if not os.path.exists(tmp):
+            print("\n[找不到歌曲]", flush=True)
+            return
+
+        print(f"\n▶ 播放中（最多 90 秒）", flush=True)
+        # ffmpeg 轉 pcm → aplay 播放
+        ff = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-i", tmp, "-f", "s16le", "-ar", "24000", "-ac", "1", "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        ap = await asyncio.create_subprocess_exec(
+            "aplay", "-q", "-f", "S16_LE", "-r", "24000", "-c", "1",
+            stdin=ff.stdout,
+        )
+        try:
+            await asyncio.wait_for(ap.wait(), timeout=90)
+        except asyncio.TimeoutError:
+            ap.kill()
+        ff.kill()
+        print("\n[播放結束]", flush=True)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 # ── 一輪對話 ──────────────────────────────────────────────────────────────────
@@ -193,12 +294,10 @@ async def main():
                 last_active = time.time()
 
                 while True:
-                    # 閒置逾時檢查
                     if time.time() - last_active > IDLE_TIMEOUT_SEC:
                         print(f"\n[閒置超過 {IDLE_TIMEOUT_SEC//60} 分鐘，自動關閉]", flush=True)
                         return
 
-                    # 藍牙斷線檢查（每輪）
                     if not bluetooth_connected():
                         print("\n[藍牙斷線，自動關閉]", flush=True)
                         return
@@ -208,6 +307,21 @@ async def main():
                         continue
 
                     last_active = time.time()
+
+                    # kids 模式：偵測唱歌 / 掰掰
+                    if VOICE_MODE == "kids":
+                        text = await loop.run_in_executor(None, kids_stt, audio)
+                        print(f"\n[識別：{text}]", flush=True)
+
+                        if detect_goodbye(text):
+                            print("\n[掰掰，自動關閉]", flush=True)
+                            return
+
+                        song_query = detect_song(text)
+                        if song_query:
+                            await play_youtube_song(song_query)
+                            continue  # 跳過 Gemini，直接回到錄音
+
                     await one_turn(session, audio)
 
         except KeyboardInterrupt:
